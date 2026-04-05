@@ -250,6 +250,47 @@ curl "http://localhost:8000/eval?query_id={uuid}"
 
 ---
 
+## System Architecture
+
+```mermaid
+flowchart TD
+    subgraph Ingestion["📄 Ingestion Pipeline (POST /ingest)"]
+        A[PDF Upload] --> B[PyMuPDF\nText Extraction]
+        B --> C[Sentence-Aware\nChunker\n512 tokens / 64 overlap]
+        C --> D[Batch Embed\nall-MiniLM-L6-v2\n384-dim unit vectors]
+        C --> E[BM25 Tokenizer\nlowercase · stopwords · JSONB]
+        D --> F[(PostgreSQL + pgvector\nDocument · Chunk · embedding)]
+        E --> F
+    end
+
+    subgraph Query["🔍 Query Pipeline (POST /query)"]
+        G[User Question] --> H
+
+        subgraph AgLoop["Agentic Loop — max 3 iterations"]
+            H[HyDE: Claude generates\nhypothetical answer] --> I[Embed\nhypothetical answer]
+            I --> J[Dense Vector Search\npgvector cosine ⟨⟩]
+            G --> K[BM25 Sparse Search\nfrom-scratch inverted index]
+            J --> L[Reciprocal Rank Fusion\nRRF k=60]
+            K --> L
+            L --> M[Cross-Encoder Rerank\nms-marco-MiniLM-L-6-v2]
+            M --> N{Claude: context\nsufficient?}
+            N -- REFINE --> H
+        end
+
+        N -- Yes / max iterations --> O[Answer Generation\nclaude-sonnet-4-20250514\ninline citations]
+        O --> P[Faithfulness Evaluation\nper-claim Claude verification]
+        P --> Q[SSE Stream to Client\ntoken · citations · metadata]
+    end
+
+    F --> J
+    F --> K
+
+    subgraph Storage["🗄️ Persisted Results"]
+        Q --> R[(Query record\nanswer · citations · score)]
+        P --> S[(EvalResult\nper-claim breakdown)]
+    end
+```
+
 ## Retrieval Pipeline Deep Dive
 
 ```
