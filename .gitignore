@@ -1,0 +1,5 @@
+.env
+Project.md
+TASKS.md
+.claude
+.pytest_cache/
