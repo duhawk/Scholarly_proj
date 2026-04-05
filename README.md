@@ -254,40 +254,53 @@ curl "http://localhost:8000/eval?query_id={uuid}"
 
 ```mermaid
 flowchart TD
-    subgraph Ingestion["Ingestion Pipeline — POST /ingest"]
-        A[PDF Upload] --> B[PyMuPDF Text Extraction]
-        B --> C[Sentence-Aware Chunker<br/>512 tokens / 64 overlap]
-        C --> D[Batch Embed<br/>all-MiniLM-L6-v2 384-dim]
-        C --> E[BM25 Tokenizer<br/>lowercase, stopwords, JSONB]
-        D --> F[(PostgreSQL + pgvector<br/>Document / Chunk / Embedding)]
-        E --> F
-    end
+    A[PDF Upload] --> B[PyMuPDF Text Extraction]
+    B --> C[Sentence-Aware Chunker]
+    C --> D[Batch Embed - all-MiniLM-L6-v2]
+    C --> E[BM25 Tokenizer]
+    D --> F[(PostgreSQL + pgvector)]
+    E --> F
 
-    subgraph Query["Query Pipeline — POST /query"]
-        G[User Question] --> H[HyDE: Claude generates<br/>hypothetical answer]
-
-        subgraph AgLoop["Agentic Loop — max 3 iterations"]
-            H --> I[Embed hypothetical answer]
-            I --> J[Dense Vector Search<br/>pgvector cosine similarity]
-            G --> K[BM25 Sparse Search<br/>from-scratch inverted index]
-            J --> L[Reciprocal Rank Fusion<br/>RRF k=60]
-            K --> L
-            L --> M[Cross-Encoder Rerank<br/>ms-marco-MiniLM-L-6-v2]
-            M --> N{Claude: context sufficient?}
-            N -- REFINE --> H
-        end
-
-        N -- Yes --> O[Answer Generation<br/>claude-sonnet-4-20250514]
-        O --> P[Faithfulness Evaluation<br/>per-claim Claude verification]
-        P --> Q[SSE Stream to Client<br/>tokens + citations + metadata]
-    end
-
+    G[User Question] --> H[HyDE - Claude generates hypothetical answer]
+    H --> I[Embed hypothetical answer]
+    I --> J[Dense Vector Search - pgvector]
+    G --> K[BM25 Sparse Search]
     F --> J
     F --> K
+    J --> L[Reciprocal Rank Fusion]
+    K --> L
+    L --> M[Cross-Encoder Rerank]
+    M --> N{Context sufficient?}
+    N -- Refine query --> H
+    N -- Yes --> O[Answer Generation - Claude]
+    O --> P[Faithfulness Evaluation]
+    P --> Q[SSE Stream to Client]
+    Q --> R[(Query + EvalResult stored)]
 
-    subgraph Persistence["Persisted Results"]
-        Q --> R[(Query record<br/>answer / citations / score)]
-        P --> S[(EvalResult<br/>per-claim breakdown)]
+    subgraph Ingestion["Ingestion Pipeline"]
+        A
+        B
+        C
+        D
+        E
+        F
+    end
+
+    subgraph AgLoop["Agentic Loop - max 3 iterations"]
+        H
+        I
+        J
+        K
+        L
+        M
+        N
+    end
+
+    subgraph Generation["Generation and Evaluation"]
+        O
+        P
+        Q
+        R
     end
 ```
 
