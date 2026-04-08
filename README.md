@@ -1,18 +1,18 @@
 # Scholarly — Academic RAG Pipeline
 
-A production-grade **Retrieval-Augmented Generation** system built from scratch — no LangChain, no LlamaIndex. Upload academic PDFs, ask natural language questions, and get cited, grounded answers streamed in real time.
+A Retrieval-Augmented Generation system for querying academic PDFs. Built without LangChain or LlamaIndex — retrieval, BM25, hybrid ranking, and evaluation are all implemented directly.
 
-Every component of the retrieval pipeline is implemented manually: BM25 from the formula up, hybrid ranking, HyDE, cross-encoder reranking, an agentic query loop, and per-claim faithfulness evaluation.
+Users upload PDFs, ask natural language questions, and receive cited answers streamed via SSE. Each answer includes inline citations and a per-claim faithfulness score.
 
 ---
 
-## What It Does
+## Overview
 
-1. **Ingest** — Upload a PDF. The system extracts text with PyMuPDF, splits it into sentence-aware overlapping chunks, embeds each chunk (`all-MiniLM-L6-v2`), and stores everything in PostgreSQL with pgvector. Ingestion runs in the background; clients poll a job ID for status.
+1. **Ingest** — Upload a PDF. Text is extracted with PyMuPDF, split into sentence-aware overlapping chunks, embedded with `all-MiniLM-L6-v2`, and stored in PostgreSQL with pgvector. Ingestion runs in a background task; the client polls a job ID for status.
 
-2. **Query** — Ask a question in plain English. The system runs a multi-stage retrieval pipeline (described below), then streams a cited answer token-by-token via Server-Sent Events. Every answer includes inline citations (`[Title, chunk N]`) and a faithfulness score.
+2. **Query** — A question goes through the retrieval pipeline (described below), and the answer is streamed token-by-token via SSE with inline citations (`[Title, chunk N]`) and a faithfulness score.
 
-3. **Evaluate** — Each answer is automatically evaluated for faithfulness: Claude checks each claim sentence against the retrieved context and returns a per-claim breakdown with a 0–1 score.
+3. **Evaluate** — After each answer is generated, Claude checks each claim sentence against the retrieved context and returns a per-claim grounded/hallucinated breakdown with a 0–1 score.
 
 ---
 
@@ -47,15 +47,13 @@ Faithfulness Evaluation (per-claim)
 SSE Stream to Client
 ```
 
-**Why each stage exists:**
-
-| Stage | Reason |
+| Stage | Notes |
 |---|---|
-| HyDE | Embeds a hypothetical answer instead of the raw question — dramatically improves dense retrieval for short, ambiguous queries |
-| Dense + BM25 | Dense search handles semantic similarity; BM25 catches exact keyword matches that embeddings miss |
-| RRF | Fuses the two ranked lists without requiring score normalization |
-| Cross-encoder rerank | Full attention between query and candidate — much higher precision than bi-encoder similarity alone |
-| Agentic loop | If the top chunks don't contain enough signal, Claude refines the query and retrieves again rather than hallucinating |
+| HyDE | Embeds a hypothetical answer rather than the raw question, which tends to improve dense retrieval for short or ambiguous queries |
+| Dense + BM25 | Dense search covers semantic similarity; BM25 covers exact keyword matches that embeddings can miss |
+| RRF | Merges the two ranked lists without requiring score normalization |
+| Cross-encoder rerank | Scores query–chunk pairs with full attention; more accurate than bi-encoder similarity at the cost of latency |
+| Agentic loop | If Claude judges the retrieved context insufficient, it reformulates the query and retrieves again (up to 3 iterations) |
 
 ---
 
@@ -412,14 +410,10 @@ curl "http://localhost:8000/eval?query_id={uuid}"
 
 ---
 
-## Design Decisions
+## Notes
 
-**No framework abstractions.** LangChain and LlamaIndex make it easy to get something running, but they make it hard to understand what's actually happening and harder to tune. Every retrieval stage here is explicit code you can read, profile, and change.
-
-**Hybrid retrieval by default.** Neither dense nor sparse search dominates across all query types. Academic papers have lots of precise terminology (BM25's strength) but also benefit from semantic matching when readers paraphrase (dense's strength). RRF fuses both without requiring score calibration.
-
-**Agentic loop over single-shot.** Single-shot RAG has a hard ceiling — if the first retrieval misses, the answer is wrong. The loop lets the system recover by giving Claude a chance to reformulate the query when the retrieved context clearly isn't sufficient.
-
-**Faithfulness evaluation on every query.** RAG systems can still hallucinate by citing real documents incorrectly. Per-claim verification catches this automatically and surfaces a score alongside every answer.
-
-**Structured JSON logs throughout.** Every log line is a JSON object with a `request_id` that ties together all logs for a single HTTP request. Makes debugging in production (or piping to a log aggregator) straightforward.
+- Retrieval components (BM25, RRF, chunker) are implemented directly rather than via a framework, mostly to keep the pipeline transparent and tunable.
+- Hybrid retrieval is used because academic text mixes precise terminology (where BM25 tends to win) with paraphrased concepts (where dense search tends to win).
+- The agentic loop exists because a single retrieval pass can miss relevant chunks, particularly for multi-part questions. Iterating with a refined query recovers some of those cases.
+- Faithfulness evaluation runs on every query because RAG systems can cite real documents while still misrepresenting them. The per-claim breakdown makes it easier to spot where that's happening.
+- Logs are structured JSON with a `request_id` per HTTP request so log lines from the same request can be correlated.
