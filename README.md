@@ -59,56 +59,34 @@ SSE Stream to Client
 
 ## System Architecture
 
+**Ingestion**
+
 ```mermaid
-flowchart TD
-    A[PDF Upload] --> B[PyMuPDF Text Extraction]
-    B --> C[Sentence-Aware Chunker]
-    C --> D[Batch Embed - all-MiniLM-L6-v2]
-    C --> E[BM25 Tokenizer]
+flowchart LR
+    A[PDF] --> B[Extract Text]
+    B --> C[Chunk]
+    C --> D[Embed]
+    C --> E[BM25 Tokenize]
     D --> F[(PostgreSQL + pgvector)]
     E --> F
+```
 
-    G[User Question] --> H[HyDE - Claude generates hypothetical answer]
-    H --> I[Embed hypothetical answer]
-    I --> J[Dense Vector Search - pgvector]
-    G --> K[BM25 Sparse Search]
-    F --> J
-    F --> K
-    J --> L[Reciprocal Rank Fusion]
-    K --> L
-    L --> M[Cross-Encoder Rerank]
-    M --> N{Context sufficient?}
-    N -- Refine query --> H
-    N -- Yes --> O[Answer Generation - Claude]
-    O --> P[Faithfulness Evaluation]
-    P --> Q[SSE Stream to Client]
-    Q --> R[(Query + EvalResult stored)]
+**Query**
 
-    subgraph Ingestion["Ingestion Pipeline"]
-        A
-        B
-        C
-        D
-        E
-        F
-    end
-
-    subgraph AgLoop["Agentic Loop - max 3 iterations"]
-        H
-        I
-        J
-        K
-        L
-        M
-        N
-    end
-
-    subgraph Generation["Generation and Evaluation"]
-        O
-        P
-        Q
-        R
-    end
+```mermaid
+flowchart TD
+    Q[Question] --> H[HyDE]
+    H --> E[Embed]
+    E --> D[Dense Search]
+    Q --> B[BM25 Search]
+    D --> R[RRF Merge]
+    B --> R
+    R --> X[Cross-encoder Rerank]
+    X --> S{Context sufficient?}
+    S -- no, refine query --> H
+    S -- yes --> G[Generate Answer]
+    G --> F[Faithfulness Eval]
+    F --> ST[SSE Stream]
 ```
 
 ---
